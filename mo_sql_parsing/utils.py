@@ -56,10 +56,7 @@ def assign(key: str, value: ParserElement):
 
 
 def simple_op(op, args, kwargs):
-    if args is None:
-        kwargs[op] = {}
-    else:
-        kwargs[op] = args
+    kwargs[op] = {} if args is None else args
     return kwargs
 
 
@@ -79,7 +76,7 @@ scrub_op = simple_op
 def scrub(result):
     if result is SQL_NULL:
         return SQL_NULL
-    elif result == None:
+    elif result is None:
         return None
     elif isinstance(result, text):
         return result
@@ -244,10 +241,7 @@ def to_tuple_call(token, index, string):
         return [tokens]
 
     candidate = [as_literal(t) for t in tokens]
-    if all(candidate):
-        return {"literal": candidate}
-
-    return [tokens]
+    return {"literal": candidate} if all(candidate) else [tokens]
 
 
 binary_ops = {
@@ -305,14 +299,14 @@ is_set_op = ("union", "union_all", "except", "minus", "intersect")
 
 
 def to_trim_call(tokens):
-    frum = tokens["from"]
-    if not frum:
+    if frum := tokens["from"]:
+        return Call("trim", [frum], {"characters": tokens["chars"], "direction": tokens["direction"]},)
+    else:
         return Call("trim", [tokens["chars"]], {"direction": tokens["direction"]})
-    return Call("trim", [frum], {"characters": tokens["chars"], "direction": tokens["direction"]},)
 
 
 def to_kwarg(tokens):
-    return {k: v for k, v in [tuple(tokens)]}
+    return dict([tuple(tokens)])
 
 
 def to_literal(t):
@@ -324,16 +318,11 @@ def to_json_call(tokens):
     op = tokens["op"].lower()
     op = binary_ops.get(op, op)
     params = tokens["params"]
-    if isinstance(params, (dict, str, int, Call)):
-        args = [params]
-    else:
-        args = list(params)
-
+    args = [params] if isinstance(params, (dict, str, int, Call)) else list(params)
     kwargs = {k: v for k, v in tokens.items() if k not in ("op", "params", "kwargs")}
-    more_kwargs = tokens["kwargs"]
-    if more_kwargs:
+    if more_kwargs := tokens["kwargs"]:
         for kv in list(more_kwargs):
-            kwargs.update(kv)
+            kwargs |= kv
 
     return ParseResults(tokens.type, tokens.start, tokens.end, [Call(op, args, kwargs)], tokens.failures,)
 
@@ -346,11 +335,7 @@ def to_interval_type(tokens):
     # ARRANGE INTO {op: params} FORMAT
     op = tokens["op"].lower()
     params = tokens["params"]
-    if isinstance(params, (dict, str, int, Call)):
-        args = [params]
-    else:
-        args = list(params)
-
+    args = [params] if isinstance(params, (dict, str, int, Call)) else list(params)
     kwargs = tokens["kwargs"]
 
     if args:
@@ -360,13 +345,12 @@ def to_interval_type(tokens):
             return {op: args, kwargs: {}}
         else:
             return {op: args, **kwargs}
+    elif not kwargs:
+        return op
+    elif isinstance(kwargs, str):
+        return {op: {}, kwargs: {}}
     else:
-        if not kwargs:
-            return op
-        elif isinstance(kwargs, str):
-            return {op: {}, kwargs: {}}
-        else:
-            return {op: {}, **kwargs}
+        return {op: {}, **kwargs}
 
 
 def has_something(tokens, index, string):
@@ -392,10 +376,7 @@ def to_interval_call(tokens, index, string):
     if len(result.args) == 1:
         result = result.args[0]
 
-    if type:
-        return Call("cast", [result, type], {})
-
-    return result
+    return Call("cast", [result, type], {}) if type else result
 
 
 def cast_interval_call(tokens, index, string):
@@ -415,10 +396,7 @@ def cast_interval_call(tokens, index, string):
             or expr.op == "add"
             and all(isinstance(e, Call) and e.op == "interval" for e in expr.args)
         ):
-            if type:
-                return Call("cast", [expr, type], {})
-            return expr
-
+            return Call("cast", [expr, type], {}) if type else expr
         type = tokens["type"]
         if type:
             return Call("interval", [expr, type], {})
@@ -431,17 +409,11 @@ def cast_interval_call(tokens, index, string):
                 acc.extend(e.args)
             else:
                 acc.append(e)
-    if len(acc) == 1:
-        expr = acc[0]
-    else:
-        expr = Call("add", args=acc, kwargs={})
-
+    expr = acc[0] if len(acc) == 1 else Call("add", args=acc, kwargs={})
     if expr.op == "interval" and len(expr.args) == 1:
         expr.args.append(type or "second")
         return expr
-    if type:
-        return Call("cast", [expr, type], {})
-    return expr
+    return Call("cast", [expr, type], {}) if type else expr
 
 
 def to_case_call(tokens):
@@ -455,9 +427,10 @@ def to_case_call(tokens):
 def to_switch_call(tokens):
     # CONVERT TO CLASSIC CASE STATEMENT
     value = tokens["value"]
-    acc = []
-    for c in list(tokens["case"]):
-        acc.append(Call("when", [Call("eq", [value] + c.args, {})], c.kwargs))
+    acc = [
+        Call("when", [Call("eq", [value] + c.args, {})], c.kwargs)
+        for c in list(tokens["case"])
+    ]
     elze = tokens["else"]
     if elze != None:
         acc.append(elze)
@@ -510,9 +483,7 @@ def to_over(tokens):
 def to_alias(tokens):
     cols = tokens["col"]
     name = tokens["name"]
-    if cols:
-        return {name: cols}
-    return name
+    return {name: cols} if cols else name
 
 
 def to_top_clause(tokens):
@@ -522,8 +493,7 @@ def to_top_clause(tokens):
 
     value = value.value()
     if tokens["ties"]:
-        output = {}
-        output["ties"] = True
+        output = {"ties": True}
         if tokens["percent"]:
             output["percent"] = value
         else:
@@ -556,13 +526,12 @@ def get_literal(value):
 
 def to_values(tokens):
     rows = list(tokens)
-    if len(rows) > 1:
-        values = [[get_literal(s["value"]) for s in listwrap(row["select"])] for row in rows]
-        if all(flatten(values)):
-            return {"from": {"literal": values}}
-        return {"union_all": list(tokens)}
-    else:
+    if len(rows) <= 1:
         return rows
+    values = [[get_literal(s["value"]) for s in listwrap(row["select"])] for row in rows]
+    if all(flatten(values)):
+        return {"from": {"literal": values}}
+    return {"union_all": list(tokens)}
 
 
 def to_stack(tokens):
@@ -588,7 +557,7 @@ def to_map(tokens):
 
 def to_struct(tokens):
     types = list(tokens["types"])
-    args = list(d for a in tokens["args"] for d in [a if a["name"] else a["value"]])
+    args = [d for a in tokens["args"] for d in [a if a["name"] else a["value"]]]
 
     output = Call("create_struct", args, {})
     if types:
@@ -645,13 +614,11 @@ def to_insert_call(tokens):
     query = tokens["query"]
     columns = tokens["columns"]
     try:
-        values = query["from"]["literal"]
-        if values:
-            if columns:
-                data = [dict(zip(columns, row)) for row in values]
-                return Call("insert", [tokens["table"]], {"values": data, **options})
-            else:
+        if values := query["from"]["literal"]:
+            if not columns:
                 return Call("insert", [tokens["table"]], {"values": values, **options})
+            data = [dict(zip(columns, row)) for row in values]
+            return Call("insert", [tokens["table"]], {"values": data, **options})
     except Exception:
         pass
 
@@ -660,8 +627,7 @@ def to_insert_call(tokens):
 
 def to_update_call(tokens):
     value = tokens["value"]
-    name = tokens["name"]
-    if name:
+    if name := tokens["name"]:
         value = {"name": name, "value": value}
     set = tokens["set"]
     frum = tokens["from"]
@@ -683,9 +649,7 @@ def to_query(tokens):
 
 def to_table(tokens):
     output = dict(tokens)
-    if len(list(output.keys())) > 1:
-        return output
-    return [output["value"]]
+    return output if len(list(output.keys())) > 1 else [output["value"]]
 
 
 def single_literal(tokens):
@@ -733,22 +697,19 @@ def double_column(tokens):
 
     val = tokens[0]
     val = '"' + val[1:-1].replace('""', '\\"') + '"'
-    un = literal_field(ast.literal_eval(val))
-    return un
+    return literal_field(ast.literal_eval(val))
 
 
 def backtick_column(tokens):
     val = tokens[0]
     val = '"' + val[1:-1].replace("``", "`").replace('"', '\\"') + '"'
-    un = literal_field(ast.literal_eval(val))
-    return un
+    return literal_field(ast.literal_eval(val))
 
 
 def square_column(tokens):
     val = tokens[0]
     val = '"' + val[1:-1].replace("]]", "]").replace('"', '\\"') + '"'
-    un = literal_field(ast.literal_eval(val))
-    return un
+    return literal_field(ast.literal_eval(val))
 
 
 # NUMBERS
@@ -757,10 +718,7 @@ real_pos = Regex(r"(\d+\.\d*|\.\d+)([eE][+-]?\d+)?").set_parser_name("float") / 
 
 
 def parse_int(tokens):
-    if "e" in tokens[0].lower():
-        return int(float(tokens[0]))
-    else:
-        return int(tokens[0])
+    return int(float(tokens[0])) if "e" in tokens[0].lower() else int(tokens[0])
 
 
 int_num = Regex(r"[+-]?\d+([eE]\+?\d+)?").set_parser_name("int") / parse_int

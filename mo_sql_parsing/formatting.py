@@ -80,10 +80,7 @@ def Operator(_op):
                 acc.append(self.dispatch(v, op_prec + 0.25))
             else:
                 acc.append(self.dispatch(v, op_prec))
-        if prec >= op_prec:
-            return op.join(acc)
-        else:
-            return f"({op.join(acc)})"
+        return op.join(acc) if prec >= op_prec else f"({op.join(acc)})"
 
     return func
 
@@ -98,12 +95,7 @@ def isolate(expr, sql, prec):
     if is_text(expr):
         return sql
     ps = [p for k in expr.keys() for p in [precedence.get(k)] if p is not None]
-    if not ps:
-        return sql
-    elif min(ps) >= prec:
-        return f"({sql})"
-    else:
-        return sql
+    return sql if not ps or min(ps) < prec else f"({sql})"
 
 
 unordered_clauses = [
@@ -195,17 +187,11 @@ class Formatter:
                 return self.op(json, prec)
         if isinstance(json, string_types):
             return escape(json, self.ansi_quotes, self.should_quote)
-        if json == None:
-            return "NULL"
-
-        return text(json)
+        return "NULL" if json is None else text(json)
 
     def sql_list(self, json, prec=precedence["from"] - 1):
         sql = ", ".join(self.dispatch(element, prec=MAX_PRECEDENCE) for element in json)
-        if prec >= precedence["from"]:
-            return sql
-        else:
-            return f"({sql})"
+        return sql if prec >= precedence["from"] else f"({sql})"
 
     def value(self, json, prec=precedence["from"]):
         parts = [self.dispatch(json["value"], prec)]
@@ -306,12 +292,10 @@ class Formatter:
             else:
                 return f"({method(value, op_prec)})"
 
-        # treat as regular function call
         if isinstance(value, dict) and len(value) == 0:
-            return key.upper() + "()"  # NOT SURE IF AN EMPTY dict SHOULD BE DELT WITH HERE, OR IN self.format()
-        else:
-            params = ", ".join(self.dispatch(p) for p in listwrap(value))
-            return f"{key.upper()}({params})"
+            return f"{key.upper()}()"
+        params = ", ".join(self.dispatch(p) for p in listwrap(value))
+        return f"{key.upper()}({params})"
 
     def _binary_not(self, value, prec):
         return "~{0}".format(self.dispatch(value))
@@ -325,9 +309,7 @@ class Formatter:
 
     def _exists(self, value, prec):
         sql = self.dispatch(value, precedence["exists"])
-        if "from" in value:
-            return f"EXISTS {sql}"
-        return f"{sql} IS NOT NULL"
+        return f"EXISTS {sql}" if "from" in value else f"{sql} IS NOT NULL"
 
     def _missing(self, value, prec):
         return "{0} IS NULL".format(self.dispatch(value, precedence["is"]))
@@ -338,10 +320,9 @@ class Formatter:
     def _substring(self, json, prec):
         if "from" in json.keys():
             return f"SUBSTRING({json['substring']} FROM {json['from']} FOR {json['for']})"
-        else:
-            # if substring does not contain from and for,  compose normal substring function
-            params = ", ".join(self.dispatch(p) for p in json["substring"])
-            return f"SUBSTRING({params})"
+        # if substring does not contain from and for,  compose normal substring function
+        params = ", ".join(self.dispatch(p) for p in json["substring"])
+        return f"SUBSTRING({params})"
 
     def _in(self, json, prec):
         member, set = json
@@ -364,12 +345,15 @@ class Formatter:
     def _case(self, checks, prec):
         parts = ["CASE"]
         for check in checks if isinstance(checks, list) else [checks]:
-            if isinstance(check, dict):
-                if "when" in check and "then" in check:
-                    parts.extend(["WHEN", self.dispatch(check["when"])])
-                    parts.extend(["THEN", self.dispatch(check["then"])])
-                else:
-                    parts.extend(["ELSE", self.dispatch(check)])
+            if isinstance(check, dict) and "when" in check and "then" in check:
+                parts.extend(
+                    [
+                        "WHEN",
+                        self.dispatch(check["when"]),
+                        "THEN",
+                        self.dispatch(check["then"]),
+                    ]
+                )
             else:
                 parts.extend(["ELSE", self.dispatch(check)])
         parts.append("END")
@@ -379,11 +363,7 @@ class Formatter:
         expr, type = json
 
         type_name, params = first(type.items())
-        if not params:
-            type = type_name.upper()
-        else:
-            type = {type_name.upper(): params}
-
+        type = type_name.upper() if not params else {type_name.upper(): params}
         return f"{name}({self.dispatch(expr)} AS {self.dispatch(type)})"
 
     def _cast(self, json, prec):
@@ -433,15 +413,12 @@ class Formatter:
         v = json["trim"]
         acc = ["TRIM("]
         if d:
-            acc.append(d.upper())
-            acc.append(" ")
+            acc.extend((d.upper(), " "))
         if c:
-            acc.append(self.dispatch(c))
-            acc.append(" ")
+            acc.extend((self.dispatch(c), " "))
         if c or d:
             acc.append("FROM ")
-        acc.append(self.dispatch(v))
-        acc.append(")")
+        acc.extend((self.dispatch(v), ")"))
         return "".join(acc)
 
     def _not_between(self, json, prec):
@@ -463,14 +440,13 @@ class Formatter:
     def _join_on(self, json, prec):
         detected_join = join_keywords & set(json.keys())
         if len(detected_join) == 0:
-            raise Exception('Fail to detect join type! Detected: "{}" Except one of: "{}"'.format(
-                [on_keyword for on_keyword in json if on_keyword != "on"][0], '", "'.join(join_keywords),
-            ))
+            raise Exception(
+                f"""Fail to detect join type! Detected: "{[on_keyword for on_keyword in json if on_keyword != "on"][0]}" Except one of: "{'", "'.join(join_keywords)}\""""
+            )
 
         join_keyword = detected_join.pop()
 
-        acc = []
-        acc.append(join_keyword.upper())
+        acc = [join_keyword.upper()]
         acc.append(self.dispatch(json[join_keyword], precedence["join"]))
 
         if json.get("on"):
@@ -494,8 +470,7 @@ class Formatter:
                 acc.append("DISTINCT")
             acc.append(self.dispatch(json[op], precedence["order"]))
             if json.get("nulls"):
-                acc.append(json.get("nulls").upper())
-                acc.append("NULLS")
+                acc.extend((json.get("nulls").upper(), "NULLS"))
         else:
             # set-op expression
             acc = [self.dispatch(json["from"], precedence["order"])]
@@ -526,10 +501,7 @@ class Formatter:
             for part in [getattr(self, clause)(json, precedence["from"])]
             if part
         )
-        if prec > precedence["from"]:
-            return sql
-        else:
-            return f"({sql})"
+        return sql if prec > precedence["from"] else f"({sql})"
 
     def with_(self, json, prec):
         if "with" in json:
@@ -544,10 +516,7 @@ class Formatter:
         if "top" in json:
             top = self.dispatch(json["top"])
             return f"SELECT TOP ({top}) {param}"
-        if "distinct_on" in json:
-            return param
-        else:
-            return f"SELECT {param}"
+        return param if "distinct_on" in json else f"SELECT {param}"
 
     def distinct_on(self, json, prec):
         param = ", ".join(self.dispatch(s) for s in listwrap(json["distinct_on"]))
@@ -614,8 +583,7 @@ class Formatter:
         acc = ["DELETE FROM ", json["delete"]]
         if "where" in json:
             json = {k: v for k, v in json.items() if k != "delete"}
-            acc.append("\n")
-            acc.append(self.dispatch(json, prec))
+            acc.extend(("\n", self.dispatch(json, prec)))
         return "".join(acc)
 
     def insert(self, json, prec=precedence["from"]):
@@ -631,19 +599,26 @@ class Formatter:
         if "values" in json:
             values = json["values"]
             if all(isinstance(row, dict) for row in values):
-                columns = list(sorted(set(k for row in values for k in row.keys())))
+                columns = list(sorted({k for row in values for k in row.keys()}))
                 acc.append(self.sql_list(columns))
                 if "if exists" in json:
                     acc.append("IF EXISTS")
-                acc.append("VALUES")
-                acc.append(",\n".join("(" + ", ".join(self._literal(row[c]) for c in columns) + ")" for row in values))
+                acc.extend(
+                    (
+                        "VALUES",
+                        ",\n".join(
+                            "("
+                            + ", ".join(self._literal(row[c]) for c in columns)
+                            + ")"
+                            for row in values
+                        ),
+                    )
+                )
             else:
                 if "if exists" in json:
                     acc.append("IF EXISTS")
                 acc.append("VALUES")
-                for row in values:
-                    acc.append("(" + ", ".join(self._literal(row)) + ")")
-
+                acc.extend("(" + ", ".join(self._literal(row)) + ")" for row in values)
         else:
             if json["if exists"]:
                 acc.append("IF EXISTS")

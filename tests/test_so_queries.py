@@ -63,8 +63,6 @@ class TestSoQueries(TestCase):
 
 
 def scrub(sql):
-    comment = strings.between(sql, "--", "\n")
-    while comment:
-        sql = sql.replace("--" + comment, "")
-        comment = strings.between(sql, "--", "\n")
+    while comment := strings.between(sql, "--", "\n"):
+        sql = sql.replace(f"--{comment}", "")
     return sql.translate(table).lower()

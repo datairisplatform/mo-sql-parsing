@@ -36,8 +36,7 @@ def parse(sql, null=SQL_NULL, calls=simple_op):
     with parse_locker:
         if not common_parser:
             common_parser = sql_parser.common_parser()
-        result = _parse(common_parser, sql, null, calls)
-        return result
+        return _parse(common_parser, sql, null, calls)
 
 
 def parse_mysql(sql, null=SQL_NULL, calls=simple_op):
